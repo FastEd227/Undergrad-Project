@@ -1,0 +1,277 @@
+import random
+
+class Resource:
+    WOOD = "wood"
+    BRICK = "brick"
+    SHEEP = "sheep"
+    WHEAT = "wheat"
+    ORE = "ore"
+    DESERT = "desert"
+
+class Tile:
+    def __init__(self, resource, number, position):
+        self.resource = resource
+        self.number = number
+        self.position = position
+        self.players = []
+
+    def __repr__(self):
+        return f"Tile({self.resource}, {self.number}, Pos:{self.position})"
+
+class Settlement:
+    def __init__(self, player, position, is_city=False):
+        self.player = player
+        self.position = position
+        self.is_city = is_city
+
+    def __repr__(self):
+        return f"Settlement({self.player}, {self.position}, City={self.is_city})"
+
+class Road:
+    def __init__(self, player, position):
+        self.player = player
+        self.position = position
+
+    def __repr__(self):
+        return f"Road({self.player}, {self.position})"
+
+class Player:
+    def __init__(self, name):
+        self.name = name
+        self.resources = {r: 0 for r in [Resource.WOOD, Resource.BRICK, Resource.SHEEP, Resource.WHEAT, Resource.ORE]}
+        self.settlements = []
+        self.roads = []
+        self.victory_points = 0
+        self.resource_values = {r: 1 for r in [Resource.WOOD, Resource.BRICK, Resource.SHEEP, Resource.WHEAT, Resource.ORE]}
+
+    def __repr__(self):
+        return f"Player({self.name})"
+
+    def calculate_victory_points(self, board):
+        self.victory_points = len(self.settlements) + sum(1 for s in self.settlements if s.is_city)
+
+    def evaluate_resource_values(self, board):
+        resource_counts = {r: 0 for r in [Resource.WOOD, Resource.BRICK, Resource.SHEEP, Resource.WHEAT, Resource.ORE]}
+        for tile in board.tiles:
+            if tile.resource != Resource.DESERT:
+                for settlement in self.settlements:
+                    if settlement.position in tile.players:
+                        resource_counts[tile.resource] += 1
+        for resource, count in resource_counts.items():
+            self.resource_values[resource] = max(1, count)
+
+    def trade(self, other_player, offered, requested):
+        offer_total = sum(self.resource_values[r] * offered.get(r, 0) for r in offered)
+        request_total = sum(self.resource_values[r] * requested.get(r, 0) for r in requested)
+        
+        # Simple trade validation
+        if offer_total >= request_total:
+            # Offer the trade
+            for resource, amount in offered.items():
+                if self.resources[resource] < amount:
+                    return False  # Ensure the player has enough resources
+                self.resources[resource] -= amount
+                other_player.resources[resource] += amount
+            
+            for resource, amount in requested.items():
+                if other_player.resources[resource] < amount:
+                    return False  # Ensure the other player has enough resources
+                self.resources[resource] += amount
+                other_player.resources[resource] -= amount
+            
+            print(f"{self.name} trades {offered} with {other_player.name} for {requested}")
+            return True
+        return False
+
+    
+class CatanBoard:
+    def __init__(self, tiles, tile_adjacencies, settlement_adjacencies):
+        self.tiles = tiles
+        self.players = []
+        self.settlements = []
+        self.roads = []
+        self.settlement_positions = set(range(1, 55))
+        self.road_positions = set(range(1, 73))
+        self.tile_adjacencies = tile_adjacencies
+        self.settlement_adjacencies = settlement_adjacencies
+
+    def add_player(self, player):
+        self.players.append(player)
+
+    def roll_dice(self):
+        return random.randint(1, 6) + random.randint(1, 6)
+
+    def distribute_resources(self, roll):
+        for tile in self.tiles:
+            if tile.number == roll and tile.resource != Resource.DESERT:
+                for player in self.players:
+                    # For each player, check if any of their settlements are on this tile
+                    for settlement in player.settlements:
+                        if settlement.position in self.settlement_adjacencies.get(tile.position, []):
+                            # Give resources to the player based on the settlement type
+                            amount = 2 if settlement.is_city else 1
+                            player.resources[tile.resource] += amount
+                            print(f"{player.name} receives {amount} {tile.resource} from tile {tile.position} ({tile.resource}, {tile.number})")
+
+
+    def build_settlement(self, player, position):
+        if (position in self.settlement_positions and
+                player.resources[Resource.WOOD] >= 1 and player.resources[Resource.BRICK] >= 1 and
+                player.resources[Resource.WHEAT] >= 1 and player.resources[Resource.SHEEP] >= 1):
+            settlement = Settlement(player, position)
+            player.settlements.append(settlement)
+            self.settlements.append(settlement)
+            self.settlement_positions.remove(position)
+            for tile in self.tiles:
+                if position in self.settlement_adjacencies.get(tile.position, []):
+                    tile.players.append(player)  # Associate the player with the tile
+            player.resources[Resource.WOOD] -= 1
+            player.resources[Resource.BRICK] -= 1
+            player.resources[Resource.WHEAT] -= 1
+            player.resources[Resource.SHEEP] -= 1
+            print(f"{player.name} builds a settlement at position {position}")
+            return True
+        return False
+
+
+    def build_road(self, player, position):
+        if (position in self.road_positions and
+                player.resources[Resource.WOOD] >= 1 and player.resources[Resource.BRICK] >= 1):
+            road = Road(player, position)
+            player.roads.append(road)
+            self.roads.append(road)
+            self.road_positions.remove(position)
+            player.resources[Resource.WOOD] -= 1
+            player.resources[Resource.BRICK] -= 1
+            print(f"{player.name} builds a road at position {position}")
+            return True
+        return False
+
+
+    def build_city(self, player, settlement):
+        if (settlement in player.settlements and not settlement.is_city and
+                player.resources[Resource.WHEAT] >= 2 and player.resources[Resource.ORE] >= 3):
+            settlement.is_city = True
+            player.resources[Resource.WHEAT] -= 2
+            player.resources[Resource.ORE] -= 3
+            print(f"{player.name} upgrades a settlement to a city at position {settlement.position}")
+            return True
+        return False
+
+    def ai_turn(self, player):
+        player.calculate_victory_points(self)
+        player.evaluate_resource_values(self)
+
+        # Build settlement (improved logic)
+        if (player.resources[Resource.WOOD] >= 1 and player.resources[Resource.BRICK] >= 1 and
+                player.resources[Resource.WHEAT] >= 1 and player.resources[Resource.SHEEP] >= 1):
+            best_position = None
+            best_value = 0
+            for pos in self.settlement_positions:
+                for tile in self.tiles:
+                    if pos in tile.players:
+                        value = player.resource_values[tile.resource] * tile.number
+                        if value > best_value:
+                            best_value = value
+                            best_position = pos
+            if best_position is not None:
+                self.build_settlement(player, best_position)
+
+        # Build road (improved logic)
+        if player.resources[Resource.WOOD] >= 1 and player.resources[Resource.BRICK] >= 1:
+            best_road_position = None
+            # Basic road placement: try to connect to existing settlements/roads
+            for road_pos in self.road_positions:
+                # very basic road placement, improve this.
+                if len(player.roads) > 0 or len(player.settlements) > 0:
+                    best_road_position = road_pos
+                    break
+            if best_road_position is not None:
+                self.build_road(player, best_road_position)
+
+        # Build city
+        for settlement in player.settlements:
+            if (not settlement.is_city and
+                    player.resources[Resource.WHEAT] >= 2 and player.resources[Resource.ORE] >= 3):
+                self.build_city(player, settlement)
+                break
+
+        # Basic Trade logic
+        if len(self.players) > 1:
+            other_player = next(p for p in self.players if p != player)
+            offered = {Resource.WOOD: 1}
+            requested = {Resource.ORE: 1}
+            player.trade(other_player, offered, requested)
+
+    def print_board(self):
+            print("\n--- Board State ---")
+            for tile in self.tiles:
+                print(f"Tile {tile.position}: Resource = {tile.resource}, Number = {tile.number}, Players = {tile.players}")
+            
+            print("\n--- Player Resources ---")
+            for player in self.players:
+                print(f"{player.name} Resources: {player.resources}")
+                print(f"{player.name} Settlements: {', '.join(str(s.position) for s in player.settlements)}")
+                print(f"{player.name} Roads: {', '.join(str(r.position) for r in player.roads)}")
+                print(f"{player.name} Victory Points: {player.victory_points}")
+
+    def play_game(self, num_turns=20):
+        for turn in range(1, num_turns + 1):
+            print(f"\n--- Turn {turn} ---")
+            self.print_board()
+            for player in self.players:
+                roll = self.roll_dice()
+                print(f"{player.name} rolls the dice and gets {roll}")
+                self.distribute_resources(roll)
+                self.ai_turn(player)
+                player.calculate_victory_points(self)
+                print(f"{player.name} Resources: {player.resources}")
+                print(f"{player.name} Settlements: {player.settlements}")
+                print(f"{player.name} Roads: {player.roads}")
+                
+                if player.victory_points >= 10:
+                    return f"{player.name} Wins!"
+        return "Game Over"
+
+
+# Example usage
+tiles = [
+    Tile(Resource.ORE, 10, 1), Tile(Resource.WHEAT, 2, 20), Tile(Resource.SHEEP, 5, 39),
+    Tile(Resource.WOOD, 9, 58), Tile(Resource.BRICK, 8, 77), Tile(Resource.DESERT, 7, 96),
+    Tile(Resource.SHEEP, 3, 2), Tile(Resource.ORE, 6, 21), Tile(Resource.WHEAT, 11, 40),
+    Tile(Resource.BRICK, 4, 59), Tile(Resource.WOOD, 8, 78), Tile(Resource.WHEAT, 9, 3),
+    Tile(Resource.SHEEP, 10, 22), Tile(Resource.ORE, 5, 41), Tile(Resource.WOOD, 3, 60),
+    Tile(Resource.BRICK, 11, 79), Tile(Resource.WOOD, 4, 4), Tile(Resource.SHEEP, 6, 23),
+    Tile(Resource.BRICK, 12, 42)
+]
+
+tile_adjacencies = {
+    1: [1, 2, 7], 20: [7, 8, 13], 39: [13, 14, 19], 58: [19, 20, 25], 77: [25, 26, 31], 96: [31, 32, 37],
+}
+
+settlement_adjacencies = {
+    1: [1], 2: [1, 2], 3: [2, 3], 4: [3, 4], 5: [4, 5], 6: [5, 6], 7: [1, 7], 8: [2, 8], 9: [3, 9], 10: [4, 10],
+}
+
+# Initialize the game board and players
+board = CatanBoard(tiles, tile_adjacencies, settlement_adjacencies)
+player1 = Player("AI 1")
+player2 = Player("AI 2")
+player3 = Player("AI 3")
+
+# Add players to the game
+board.add_player(player1)
+board.add_player(player2)
+board.add_player(player3)
+
+# Pre-set some initial settlements and roads to simulate a game in progress
+board.build_settlement(player1, 1)  # AI 1 settles at position 1
+board.build_road(player1, 1)        # AI 1 builds a road at position 1
+board.build_settlement(player2, 7)  # AI 2 settles at position 7
+board.build_road(player2, 6)        # AI 2 builds a road at position 6
+board.build_settlement(player3, 3)  # AI 3 settles at position 3
+board.build_road(player3, 4)        # AI 3 builds a road at position 4
+
+# Start the game and simulate it for 10 turns
+result = board.play_game(num_turns=10)
+print(result)
