@@ -1,0 +1,82 @@
+import tkinter as tk
+from tkinter import messagebox
+
+# Example placeholder classes for resources and players
+class Resource:
+    WOOD = 'wood'
+    BRICK = 'brick'
+    SHEEP = 'sheep'
+    WHEAT = 'wheat'
+    ORE = 'ore'
+
+class Player:
+    def __init__(self, name):
+        self.name = name
+        self.resources = {Resource.WOOD: 0, Resource.BRICK: 0, Resource.SHEEP: 0, Resource.WHEAT: 0, Resource.ORE: 0}
+        self.victory_points = 0
+
+    def add_resources(self, resource, amount):
+        if resource in self.resources:
+            self.resources[resource] += amount
+
+# Create the main window
+root = tk.Tk()
+root.title("Catan Game Simulation")
+
+# Create Player 1 and Player 2
+player1 = Player("AI 1")
+player2 = Player("AI 2")
+
+# Create the board
+def create_board():
+    board_frame = tk.Frame(root)
+    board_frame.pack()
+
+    for row in range(5):
+        for col in range(5):
+            tile = tk.Button(board_frame, text=f"{row},{col}", width=10, height=4, command=lambda r=row, c=col: on_tile_click(r, c))
+            tile.grid(row=row, column=col, padx=2, pady=2)
+
+def on_tile_click(row, col):
+    messagebox.showinfo("Tile Clicked", f"Tile at ({row}, {col}) clicked!")
+
+create_board()
+
+# Display player info
+player_info_label = tk.Label(root, text=f"Player 1 Resources: {player1.resources}\nPlayer 2 Resources: {player2.resources}")
+player_info_label.pack()
+
+# Update player resources on the GUI
+def update_resources():
+    player_info_label.config(text=f"Player 1 Resources: {player1.resources}\nPlayer 2 Resources: {player2.resources}")
+
+# Add resource to Player 1
+def add_resource_player1():
+    player1.add_resources(Resource.WOOD, 1)
+    update_resources()
+
+add_button1 = tk.Button(root, text="Add WOOD to Player 1", command=add_resource_player1)
+add_button1.pack()
+
+# Build Settlement for Player 1
+def build_settlement():
+    player1.add_resources(Resource.WHEAT, -1)
+    player1.add_resources(Resource.BRICK, -1)
+    player1.add_resources(Resource.WOOD, -1)
+    player1.add_resources(Resource.SHEEP, -1)
+    update_resources()
+    messagebox.showinfo("Settlement", "Player 1 has built a settlement!")
+
+build_settlement_button = tk.Button(root, text="Build Settlement for Player 1", command=build_settlement)
+build_settlement_button.pack()
+
+# Next Turn button
+def next_turn():
+    messagebox.showinfo("Next Turn", "Proceeding to the next turn!")
+    # Simulate next turn actions here (e.g., roll dice, distribute resources, etc.)
+
+next_turn_button = tk.Button(root, text="Next Turn", command=next_turn)
+next_turn_button.pack()
+
+# Start the GUI loop
+root.mainloop()

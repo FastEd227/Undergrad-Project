@@ -1,0 +1,333 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+
+def simplified_catan_resource_production(board, player_settlements, player_cities, dice_roll, num_players):
+    """Simulates resource production in Catan.  This part demonstrates Standard Nash.
+
+    Args:
+        board: Board layout.
+        player_settlements: Player settlements.
+        player_cities: Player cities.
+        dice_roll: Dice roll.
+        num_players: Number of players.
+
+    Returns:
+        Resource production dictionary.
+    """
+    player_resources = {player_number: {'wood': 0, 'brick': 0, 'sheep': 0, 'wheat': 0, 'ore': 0}
+                        for player_number in range(1, num_players + 1)}
+
+    for hex_id, (resource_type, number_token) in board.items():
+        if number_token == dice_roll:
+            for player_number in range(1, num_players + 1):
+                if player_number in player_settlements and hex_id in player_settlements[player_number]:
+                    player_resources[player_number][resource_type] += 1
+                if player_number in player_cities and hex_id in player_cities[player_number]:
+                    player_resources[player_number][resource_type] += 2
+    return player_resources
+
+def calculate_trade_jacobian(player_resources_before, player_resources_after, num_players):
+    """Calculates a simplified Jacobian-like matrix to analyze the effect of trade.
+
+    Args:
+        player_resources_before: Resource distribution before trade.
+        player_resources_after: Resource distribution after trade.
+        num_players: Number of players.
+
+    Returns:
+        Jacobian matrix.
+    """
+    jacobian = np.zeros((num_players * 5, num_players * 5))
+    resource_types = ['wood', 'brick', 'sheep', 'wheat', 'ore']
+
+    for player_out_index in range(num_players):
+        for resource_out_index, resource_out_type in enumerate(resource_types):
+            for player_in_index in range(num_players):
+                for resource_in_index, resource_in_type in enumerate(resource_types):
+                    # Simplified: Change in a player's resource OUT is related to change in OTHER player's resource IN.
+                    jacobian[player_out_index * 5 + resource_out_index, player_in_index * 5 + resource_in_index] = \
+                        (player_resources_after[player_out_index + 1][resource_out_type] -
+                         player_resources_before[player_out_index + 1][resource_out_type]) / \
+                        (player_resources_after[player_in_index + 1][resource_in_type] -
+                         player_resources_before[player_in_index + 1][resource_in_type] + 1e-9)  # Avoid division by zero
+    return jacobian
+
+def simulate_trades(player_resources, num_players, trade_intensity=0.1):
+    """Simulates trading between players.
+
+    Args:
+        player_resources: Current resource distribution.
+        num_players: Number of players.
+        trade_intensity: Higher value = more trading.
+
+    Returns:
+        Updated resource distribution after trades.
+    """
+    updated_resources = {p: r.copy() for p, r in player_resources.items()}
+    resource_types = ['wood', 'brick', 'sheep', 'wheat', 'ore']
+
+    for player in range(1, num_players + 1):
+        # Randomly choose a trading partner.
+        trade_partner = random.choice([p for p in range(1, num_players + 1) if p != player])
+        # Randomly choose a resource to trade.
+        offered_resource = random.choice(resource_types)
+        requested_resource = random.choice(resource_types)
+
+        #Very simplified trade logic
+        if updated_resources[player][offered_resource] > 0:
+            amount_offered = int(updated_resources[player][offered_resource] * trade_intensity)
+            amount_requested = int(amount_offered * (1 + (random.random() - 0.5) * 0.5)) # Trade rate varies
+            if amount_requested > 0: # added check
+                updated_resources[player][offered_resource] -= amount_offered
+                updated_resources[player][requested_resource] += amount_requested
+                updated_resources[trade_partner][offered_resource] += amount_offered
+                updated_resources[trade_partner][requested_resource] -= amount_requested
+
+    return updated_resources
+
+def simulate_settlement_placement(player_settlements, board, num_players, turn):
+    """Simulates settlement placement with limited spots (Generalized Nash).
+
+    Args:
+        player_settlements: Current settlement locations for each player.
+        board: The game board.
+        num_players: Number of players.
+        turn: The current turn number.
+
+    Returns:
+        Updated player settlements.
+    """
+    updated_settlements = {p: s.copy() for p, s in player_settlements.items()}
+    available_spots = list(board.keys())  # Initially, all board spots are available
+
+    for player in range(1, num_players + 1):
+        if turn % 3 == 0 and len(updated_settlements[player]) < 5:  #limit of 5 settlements.
+            # Find available spots that are not already occupied
+            valid_spots = [spot for spot in available_spots if not any(spot in s for s in updated_settlements.values())]
+            if valid_spots:
+                # Choose a random available spot
+                chosen_spot = random.choice(valid_spots)
+                updated_settlements[player].append(chosen_spot)
+                available_spots.remove(chosen_spot)  # Remove the spot, so no one else can build there. This is the GNE part.
+    return updated_settlements
+
+def create_resource_production_space(num_players):
+    """
+    Creates a conceptual resource production space.
+
+    Args:
+      num_players: Number of players.
+
+    Returns:
+      Resource production space dimension.
+    """
+    dimension = num_players * 5
+    return {'dimension': dimension}
+
+def run_simulations(board, initial_player_settlements, initial_player_cities, num_players, num_simulations, num_turns):
+    """Runs multiple Catan simulations and collects data.
+
+    Args:
+        board: Board layout.
+        initial_player_settlements: Initial player settlements.
+        initial_player_cities: Initial player cities.
+        num_players: Number of players.
+        num_simulations: Number of simulations to run.
+        num_turns: Number of turns per simulation.
+
+    Returns:
+        A dictionary containing the collected data:
+        {
+            'trade_jacobian_matrices': [jacobian_matrix_per_turn_per_simulation],
+            'resource_histories': [resource_history_per_simulation],
+            'settlement_histories': [settlement_history_per_simulation] #record settlement history
+        }
+    """
+    simulation_data = {
+        'trade_jacobian_matrices': [],
+        'resource_histories': [],
+        'settlement_histories': []
+    }
+
+    for simulation in range(num_simulations):
+        print(f"Starting simulation {simulation + 1}/{num_simulations}")
+        # Reset game state for each simulation
+        player_settlements = {p: s.copy() for p, s in initial_player_settlements.items()}
+        player_cities = {p: c.copy() for p, c in initial_player_cities.items()}
+        resource_history = []
+        settlement_history = []
+
+        for turn in range(num_turns):
+            dice_roll = np.random.randint(2, 13)
+            player_resources_before_trade = simplified_catan_resource_production(board, player_settlements, player_cities,
+                                                                              dice_roll, num_players)
+            player_resources_after_trade = simulate_trades(player_resources_before_trade, num_players)  # Simulate trades
+            trade_jacobian_matrix = calculate_trade_jacobian(player_resources_before_trade, player_resources_after_trade,
+                                                            num_players)
+            simulation_data['trade_jacobian_matrices'].append(trade_jacobian_matrix)
+            resource_history.append(player_resources_after_trade)
+
+            # Simulate settlement placement (Generalized Nash)
+            player_settlements = simulate_settlement_placement(player_settlements, board, num_players, turn)
+            settlement_history.append(player_settlements.copy()) #store
+            simulation_data['settlement_histories'].append(settlement_history)
+
+            #Very simple settlement/city growth
+            for player in range(1, num_players + 1):
+                if turn % 5 == 0 and len(player_cities[player]) < 4 and len(player_settlements[player]) > 0:
+                    player_cities[player].append(len(board) + 1 + len(player_cities[player]))
+                    player_settlements[player].pop(0)
+
+        simulation_data['resource_histories'].append(resource_history)
+        simulation_data['settlement_histories'].append(settlement_history)
+    return simulation_data
+
+def analyze_simulation_data(simulation_data, num_players, num_turns):
+    """Analyzes the collected simulation data and generates plots.
+
+    Args:
+        simulation_data: The data returned by run_simulations.
+        num_players: Number of players.
+        num_turns: Number of turns
+    """
+    trade_jacobian_matrices = simulation_data['trade_jacobian_matrices']
+    resource_histories = simulation_data['resource_histories']
+    settlement_histories = simulation_data['settlement_histories']
+    num_simulations = len(resource_histories)
+
+    print("\n--- Simulation Analysis ---")
+    print(f"Number of simulations: {num_simulations}")
+    print(f"Turns per simulation: {num_turns}")
+
+    # Analyze Trade Jacobian Matrices
+    print("\nTrade Jacobian Matrix Analysis:")
+    avg_trade_jacobian = np.zeros_like(trade_jacobian_matrices[0])
+    for matrix in trade_jacobian_matrices:
+        avg_trade_jacobian += matrix
+    avg_trade_jacobian /= num_simulations
+    print("Average Trade Jacobian Matrix:")
+    print(avg_trade_jacobian)
+
+    # Calculate variance
+    trade_jacobian_variances = np.zeros_like(trade_jacobian_matrices[0])
+    for sim in range(num_simulations):
+        trade_jacobian_variances += (trade_jacobian_matrices[sim] - avg_trade_jacobian) ** 2
+    trade_jacobian_variances /= num_simulations
+    print("\nVariance of Trade Jacobian Matrix:")
+    print(trade_jacobian_variances)
+
+    # Plot Trade Jacobian Matrix (as a heatmap)
+    plt.figure(figsize=(12, 10))
+    plt.imshow(avg_trade_jacobian, cmap='viridis', interpolation='nearest')
+    plt.title("Average Trade Jacobian Matrix")
+    plt.colorbar()
+    plt.xlabel("Change in Other Player Resources")
+    plt.ylabel("Change in Player Resources")
+    plt.xticks(np.arange(0, num_players * 5),
+               [f"P{i + 1}_{r}" for i in range(num_players) for r in ['wood', 'brick', 'sheep', 'wheat', 'ore']], rotation=90)
+    plt.yticks(np.arange(0, num_players * 5),
+               [f"P{i + 1}_{r}" for i in range(num_players) for r in ['wood', 'brick', 'sheep', 'wheat', 'ore']])
+    plt.show()
+
+    # Analyze resource production
+    print("\nResource Production Analysis")
+    player_resources = {player_number: {'wood': 0, 'brick': 0, 'sheep': 0, 'wheat': 0, 'ore': 0} for player_number in
+                        range(1, num_players + 1)}
+    for player_number in range(1, num_players + 1):
+        print(f"\nPlayer {player_number}:")
+        for resource_type in ['wood', 'brick', 'sheep', 'wheat', 'ore']:
+            total_resource = 0
+            for sim_history in resource_histories:
+                for turn_resources in sim_history:
+                    total_resource += turn_resources[player_number][resource_type]
+            avg_resource = total_resource / (num_simulations * num_turns)
+            player_resources[player_number][resource_type] = avg_resource
+            print(f"  Avg {resource_type}: {avg_resource:.2f}")
+
+    # Plot Resource Production
+    plt.figure(figsize=(10, 6))
+    bar_width = 0.15
+    r = np.arange(num_players)
+    for i, resource_type in enumerate(['wood', 'brick', 'sheep', 'wheat', 'ore']):
+        plt.bar(r + i * bar_width, [player_resources[p][resource_type] for p in range(1, num_players + 1)],
+                width=bar_width, label=resource_type)
+    plt.xlabel("Players")
+    plt.ylabel("Average Resource Production")
+    plt.title("Average Resource Production per Player (with Trading)")
+    plt.xticks(r + 2 * bar_width, [f"Player {i}" for i in range(1, num_players + 1)])
+    plt.legend()
+    plt.show()
+
+    # Analyze Settlement Placement (Generalized Nash)
+    print("\nSettlement Placement Analysis (Generalized Nash):")
+    final_settlements = {p: [] for p in range(1, num_players + 1)}
+    for sim_history in settlement_histories:
+        final_turn_settlements = sim_history[-1]  # Get the settlements from the final turn of each simulation
+        for player in range(1, num_players + 1):
+            final_settlements[player].extend(final_turn_settlements[player])
+
+    for player in range(1, num_players + 1):
+        print(f"\nPlayer {player}:")
+        settlement_counts = {}
+        for settlement in final_settlements[player]:
+            settlement_counts[settlement] = settlement_counts.get(settlement, 0) + 1
+        for settlement, count in settlement_counts.items():
+            print(f"  Settlement on spot {settlement}: {count} times")
+
+    return player_resources, avg_trade_jacobian
+
+if __name__ == "__main__":
+    # Increased board size and complexity
+    board = {
+        1: ('wood', 2),
+        2: ('brick', 3),
+        3: ('sheep', 4),
+        4: ('wheat', 5),
+        5: ('ore', 6),
+        6: ('wood', 8),
+        7: ('brick', 9),
+        8: ('sheep', 10),
+        9: ('wheat', 11),
+        10: ('ore', 12),
+        11: ('wood', 2),
+        12: ('brick', 4),
+        13: ('sheep', 6),
+        14: ('wheat', 8),
+        15: ('ore', 10),
+        16: ('wood', 3),
+        17: ('brick', 5),
+        18: ('sheep', 7),
+        19: ('wheat', 9),
+        20: ('ore', 11),
+        21: ('wood', 4),
+        22: ('brick', 6),
+        23: ('sheep', 8),
+        24: ('wheat', 10),
+        25: ('ore', 12),
+        26: ('wood', 2),
+        27: ('brick', 3),
+        28: ('sheep', 4),
+        29: ('wheat', 5),
+        30: ('ore', 6),
+    }
+    num_players = 3
+    initial_player_settlements = {
+        1: [1, 4, 7, 10, 13],
+        2: [2, 5, 8, 11, 14],
+        3: [12, 15, 18, 21, 24],
+    }
+    initial_player_cities = {
+        1: [3, 9],
+        2: [6, 10],
+        3: [20, 25],
+    }
+    num_simulations = 100
+    num_turns = 200
+
+    # Run simulations
+    simulation_data = run_simulations(board, initial_player_settlements, initial_player_cities, num_players, num_simulations,
+                                     num_turns)
+
+    # Analyze the data and plot
+    player_resources, avg_trade_jacobian = analyze_simulation_data(simulation_data, num_players, num_turns)

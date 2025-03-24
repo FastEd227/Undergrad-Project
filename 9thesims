@@ -1,0 +1,513 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import random
+
+def catan_simulator(num_simulations, num_turns, board_template, initial_player_settlements_template, initial_player_cities_template):
+    """
+    Simulates multiple Catan games with more realistic mechanics and player decision-making.
+    The board and player states are reset at the beginning of each simulation.
+
+    Args:
+        num_simulations: The number of games to simulate.
+        num_turns: The number of turns to simulate per game.
+        board_template:  A dictionary representing the Catan board template (the board setup).
+        initial_player_settlements_template: A dictionary where keys are player numbers and values are
+                          lists of hex IDs where they have settlements (the initial settlement setup).
+        initial_player_cities_template:  A dictionary where keys are player numbers and values are
+                          lists of hex IDs where they have cities (the initial city setup).
+
+    Returns:
+        A dictionary containing the collected data:
+        {
+            'resource_history': {player_number: {resource_type: [resource_amounts_per_turn]}},
+            'settlement_history': {player_number: [settlement_counts_per_turn]},
+            'city_history': {player_number: [city_counts_per_turn]},
+            'game_lengths': [game_lengths],
+            'trade_history': [trade_records],  # List of trade records in each game
+            'robber_history': [robber_placements] # List of robber placements in each game
+        }
+    """
+    all_data = {
+        'resource_history': {},
+        'settlement_history': {},
+        'city_history': {},
+        'game_lengths': [],
+        'trade_history': [],
+        'robber_history': []
+    }
+
+    num_players = len(initial_player_settlements_template)
+
+    for player_number in range(1, num_players + 1):
+        all_data['resource_history'][player_number] = {
+            'wood': [],
+            'brick': [],
+            'sheep': [],
+            'wheat': [],
+            'ore': []
+        }
+        all_data['settlement_history'][player_number] = []
+        all_data['city_history'][player_number] = []
+
+    for simulation in range(num_simulations):
+        print(f"Starting simulation {simulation + 1}/{num_simulations}")
+
+        # Reset the board and player states for each simulation
+        board = board_template.copy()  # Create a copy to avoid modifying the original template
+        initial_player_settlements = {player: settlements.copy() for player, settlements in initial_player_settlements_template.items()}
+        initial_player_cities = {player: cities.copy() for player, cities in initial_player_cities_template.items()}
+        player_resources = {player_number: {'wood': 0, 'brick': 0, 'sheep': 0, 'wheat': 0, 'ore': 0}
+                             for player_number in range(1, num_players + 1)}
+        game_over = False
+        turn = 0
+        robber_location = 11  # Initial robber location (desert)
+        player_strategies = {player_number: random.choice(['balanced', 'settlement_focus', 'city_focus', 'development_focus']) for player_number in range(1, num_players + 1)}
+
+        game_state = {
+            'board': board,
+            'player_settlements': initial_player_settlements,
+            'player_cities': initial_player_cities,
+            'player_resources': player_resources,
+            'game_over': game_over,
+            'turn': turn,
+            'robber_location': robber_location,
+            'player_strategies': player_strategies,
+        }
+
+        trade_records = []
+        robber_placements = []
+
+        while not game_state['game_over'] and game_state['turn'] < num_turns:
+            game_state['turn'] += 1
+            #print(f"Turn {game_state['turn']}")
+
+            # Dice roll
+            dice_roll = random.randint(2, 12)
+
+            # Robber Placement
+            if dice_roll == 7:
+                robber_location = robber_phase(game_state, num_players)
+                robber_placements.append(robber_location)
+
+            # Resource production for each player
+            for player_number in range(1, num_players + 1):
+                resources_produced = resource_production(game_state['board'], game_state['player_settlements'], game_state['player_cities'], dice_roll, player_number, game_state['robber_location'])
+                #print(f"  Player {player_number} produced: {resources_produced}")
+                for resource, amount in resources_produced.items():
+                    game_state['player_resources'][player_number][resource] += amount
+                    all_data['resource_history'][player_number][resource].append(game_state['player_resources'][player_number][resource])
+
+                # Record settlement and city counts
+                all_data['settlement_history'][player_number].append(len(game_state['player_settlements'][player_number]))
+                all_data['city_history'][player_number].append(len(game_state['player_cities'][player_number]))
+
+            # Trading
+            trades = trading_phase(game_state, num_players)
+            trade_records.append(trades)
+
+            # Building
+            building_phase(game_state, num_players)
+
+            # Win condition (simplified)
+            for player_number in range(1, num_players + 1):
+                victory_points = len(game_state['player_settlements'][player_number]) + (2 * len(game_state['player_cities'][player_number]))
+                if victory_points >= 10:
+                    game_state['game_over'] = True
+                    #print(f"Player {player_number} wins!")
+                    break
+        all_data['game_lengths'].append(game_state['turn'])
+        all_data['trade_history'].append(trade_records)
+        all_data['robber_history'].append(robber_placements)
+    return all_data
+
+def resource_production(board, player_settlements, player_cities, dice_roll, player_number, robber_location):
+    """
+    Simulates resource production in Catan for a specific player, considering the robber.
+
+    Args:
+        board:  Dictionary: {hex_id: (resource_type, number_token)}
+        player_settlements: Dictionary: {player_number: [hex_ids]}
+        player_cities: Dictionary: {player_number: [hex_ids]}
+        dice_roll: int (2-12)
+        player_number: int
+        robber_location: int (hex_id)
+
+    Returns:
+        Dictionary: {resource_type: amount}
+    """
+    resources = {'wood': 0, 'brick': 0, 'sheep': 0, 'wheat': 0, 'ore': 0}
+
+    if player_number in player_settlements:
+        for hex_id in player_settlements[player_number]:
+            if hex_id in board:
+                resource_type, number_token = board[hex_id]
+                if number_token == dice_roll and hex_id != robber_location:  # Robber prevents production
+                    resources[resource_type] += 1
+
+    if player_number in player_cities:
+        for hex_id in player_cities[player_number]:
+            if hex_id in board:
+                resource_type, number_token = board[hex_id]
+                if number_token == dice_roll and hex_id != robber_location:  # Robber prevents production
+                    resources[resource_type] += 2
+    return resources
+
+def trading_phase(game_state, num_players):
+    """
+    Simulates trading between players.  Simplified: Each player proposes one trade.
+
+    Args:
+        game_state: The current game state.
+        num_players: number of players
+
+    Returns:
+        list of trade tuples (player1, player2, offered_resource, offered_amount, requested_resource, requested_amount)
+    """
+    trades = []
+    for player in range(1, num_players + 1):
+        #check if player has resources to trade
+        if sum(game_state['player_resources'][player].values()) > 0:
+            #propose a trade
+            trade_partner = random.choice([p for p in range(1, num_players + 1) if p != player])
+            offered_resource = random.choice([r for r, amount in game_state['player_resources'][player].items() if amount > 0])
+            offered_amount = random.randint(1, game_state['player_resources'][player][offered_resource])
+            requested_resource = random.choice([r for r in game_state['player_resources'][trade_partner]])
+            requested_amount = random.randint(1, 3) #limit requested amount
+
+            #check if trade partner wants to trade
+            if willing_to_trade(game_state, trade_partner, offered_resource, offered_amount, requested_resource, requested_amount):
+                #execute trade
+                game_state['player_resources'][player][offered_resource] -= offered_amount
+                game_state['player_resources'][player][requested_resource] += requested_amount
+                game_state['player_resources'][trade_partner][offered_resource] += offered_amount
+                game_state['player_resources'][trade_partner][requested_resource] -= requested_amount
+                trades.append((player, trade_partner, offered_resource, offered_amount, requested_resource, requested_amount))
+    return trades
+
+def willing_to_trade(game_state, player, offered_resource, offered_amount, requested_resource, requested_amount):
+    """
+    Determines if a player is willing to trade.  Simplified: checks if they have enough of the requested resource and if they need the offered resource.
+
+    Args:
+        game_state: The current game state.
+        player: The player to check.
+        offered_resource: The resource being offered.
+        offered_amount: The amount of the offered resource.
+        requested_resource: The resource being requested.
+        requested_amount: The amount of the requested resource.
+
+    Returns:
+        bool: True if the player is willing to trade, False otherwise.
+    """
+    # Check if the player has enough of the requested resource
+    if game_state['player_resources'][player][requested_resource] < requested_amount:
+        return False
+
+    # Check if the player needs the offered resource (very simplified)
+    if game_state['player_resources'][player][offered_resource] < 2:  #arbitrary threshold
+        return True
+
+    return False
+
+def building_phase(game_state, num_players):
+    """
+    Simulates the building phase for all players, using their strategies.
+
+    Args:
+        game_state: The current game state.
+        num_players: number of players
+    """
+    for player in range(1, num_players + 1):
+        strategy = game_state['player_strategies'][player]
+        resources = game_state['player_resources'][player]
+
+        if strategy == 'balanced':
+            build_settlement(game_state, player)
+            build_city(game_state, player)
+            #build_road(game_state, player) # Removed road building
+            buy_development_card(game_state, player)
+        elif strategy == 'settlement_focus':
+            build_settlement(game_state, player)
+            build_settlement(game_state, player) #try twice
+            #build_road(game_state, player)
+            buy_development_card(game_state, player)
+        elif strategy == 'city_focus':
+            build_city(game_state, player)
+            build_city(game_state, player) #try twice
+            #build_road(game_state, player)
+            buy_development_card(game_state, player)
+        elif strategy == 'development_focus':
+            buy_development_card(game_state, player)
+            buy_development_card(game_state, player) #try twice
+            build_settlement(game_state, player)
+            #build_road(game_state, player)
+
+def build_settlement(game_state, player):
+    """
+    Attempts to build a settlement for the player.
+
+    Args:
+        game_state: The current game state.
+        player: The player number.
+    """
+    if game_state['player_resources'][player]['wood'] >= 1 and \
+       game_state['player_resources'][player]['brick'] >= 1 and \
+       game_state['player_resources'][player]['sheep'] >= 1 and \
+       game_state['player_resources'][player]['wheat'] >= 1 and \
+       len(game_state['player_settlements'][player]) < 5:
+        game_state['player_resources'][player]['wood'] -= 1
+        game_state['player_resources'][player]['brick'] -= 1
+        game_state['player_resources'][player]['sheep'] -= 1
+        game_state['player_resources'][player]['wheat'] -= 1
+        game_state['player_settlements'][player].append(len(game_state['player_settlements'][player]) + 1)
+
+def build_city(game_state, player):
+    """
+    Attempts to build a city for the player.
+
+    Args:
+        game_state: The current game state.
+        player: The player number.
+    """
+    if game_state['player_resources'][player]['wheat'] >= 2 and \
+       game_state['player_resources'][player]['ore'] >= 3 and \
+       len(game_state['player_cities'][player]) < 4 and \
+       len(game_state['player_settlements'][player]) > 0: #can only build city if there is a settlement
+        game_state['player_resources'][player]['wheat'] -= 2
+        game_state['player_resources'][player]['ore'] -= 3
+        game_state['player_cities'][player].append(len(game_state['player_cities'][player]) + 1)
+        game_state['player_settlements'][player].pop(0) #replace settlement with city
+
+def buy_development_card(game_state, player):
+    """
+    Attempts to buy a development card for the player.  Simplified: always buys if possible.
+
+    Args:
+        game_state: The current game state.
+        player: The player number.
+    """
+    if game_state['player_resources'][player]['ore'] >= 1 and \
+       game_state['player_resources'][player]['sheep'] >= 1 and \
+       game_state['player_resources'][player]['wheat'] >= 1:
+        game_state['player_resources'][player]['ore'] -= 1
+        game_state['player_resources'][player]['sheep'] -= 1
+        game_state['player_resources'][player]['wheat'] -= 1
+        # In a real game, you would add the card to the player's hand and handle its effect.
+        # Here, we just track that a card was bought.
+        # For simplicity, we don't track different types of development cards.
+
+def robber_phase(game_state, num_players):
+    """
+    Simulates the robber placement and stealing.
+
+    Args:
+        game_state: The current game state.
+        num_players: number of players
+
+    Returns:
+        the new robber location
+    """
+    #simplified robber placement: moves to a random non-desert tile
+    possible_locations = [hex_id for hex_id, (resource_type, number_token) in game_state['board'].items() if resource_type != 'desert']
+    new_robber_location = random.choice(possible_locations)
+    game_state['robber_location'] = new_robber_location #update robber location
+
+    #steal resource
+    players_on_robber_hex = []
+    for player in range(1, num_players + 1):
+        if player in game_state['player_settlements']:
+            if new_robber_location in game_state['player_settlements'][player]:
+                players_on_robber_hex.append(player)
+        if player in game_state['player_cities']:
+            if new_robber_location in game_state['player_cities'][player]:
+                players_on_robber_hex.append(player)
+
+    if players_on_robber_hex:
+        victim = random.choice(players_on_robber_hex)
+        if sum(game_state['player_resources'][victim].values()) > 0:
+            stolen_resource = random.choice(list(game_state['player_resources'][victim].keys()))
+            game_state['player_resources'][victim][stolen_resource] -= 1
+            #find the player that moved the robber
+            for p in range(1, num_players + 1):
+                if game_state['turn'] > 0: #after the first roll
+                    if stolen_resource in game_state['player_resources'][p]:
+                        game_state['player_resources'][p][stolen_resource] += 1
+                        break
+    return new_robber_location
+
+def analyze_simulation_data(data):
+    """
+    Analyzes the data collected from the Catan simulations.
+
+    Args:
+        data: A dictionary containing the collected data (returned by catan_simulator).
+
+    Returns:
+        None.  Prints the analysis results.
+    """
+    num_players = len(data['resource_history'])
+
+    print("\n--- Simulation Analysis ---")
+    for player_number in range(1, num_players + 1):
+        print(f"\nPlayer {player_number}:")
+        print("  Average Resource Counts:")
+        for resource_type in ['wood', 'brick', 'sheep', 'wheat', 'ore']:
+            resource_history = data['resource_history'][player_number][resource_type]
+            #  Calculate the average resource count across all turns.
+            avg_resource = np.mean(resource_history)
+            print(f"    {resource_type}: {avg_resource:.2f}")
+
+        print("  Resource Count Variance:")
+        for resource_type in ['wood', 'brick', 'sheep', 'wheat', 'ore']:
+            resource_history = data['resource_history'][player_number][resource_type]
+            resource_variance = np.var(resource_history)
+            print(f"    {resource_type}: {resource_variance:.2f}")
+
+        settlement_history = data['settlement_history'][player_number]
+        avg_settlements = np.mean(settlement_history)
+        variance_settlements = np.var(settlement_history)
+        print(f"  Avg Settlements: {avg_settlements:.2f}, Variance: {variance_settlements:.2f}")
+
+        city_history = data['city_history'][player_number]
+        avg_cities = np.mean(city_history)
+        variance_cities = np.var(city_history)
+        print(f"  Avg Cities: {avg_cities:.2f}, Variance: {variance_cities:.2f}")
+
+    game_lengths = data['game_lengths']
+    avg_game_length = np.mean(game_lengths)
+    variance_game_length = np.var(game_lengths)
+    print(f"\nAverage Game Length: {avg_game_length:.2f} turns")
+    print(f"Game Length Variance: {variance_game_length:.2f} turns")
+
+def calculate_stability_metrics(data):
+    """
+    Calculates metrics to help quantify the stability of the Catan game simulation.
+
+    Args:
+        data: The data dictionary returned by catan_simulator.
+
+    Returns:
+        A dictionary containing stability metrics:
+        {
+            'resource_stability': {player_number: float},  # Average resource variance per player
+            'structure_stability': {player_number: float}, # Average settlement and city variance per player
+            'game_length_stability': float               # Variance of game lengths
+        }
+    """
+    num_players = len(data['resource_history'])
+    stability_metrics = {
+        'resource_stability': {},
+        'structure_stability': {},
+        'game_length_stability': 0
+    }
+
+    for player_number in range(1, num_players + 1):
+        resource_variances = []
+        for resource_type in ['wood', 'brick', 'sheep', 'wheat', 'ore']:
+            resource_history = data['resource_history'][player_number][resource_type]
+            resource_variance = np.var(resource_history)
+            resource_variances.append(resource_variance)
+        stability_metrics['resource_stability'][player_number] = np.mean(resource_variances)
+
+        settlement_variance = np.var(data['settlement_history'][player_number])
+        city_variance = np.var(data['city_history'][player_number])
+        stability_metrics['structure_stability'][player_number] = np.mean([settlement_variance, city_variance])
+
+    stability_metrics['game_length_stability'] = np.var(data['game_lengths'])
+
+    return stability_metrics
+
+def plot_resource_trends(data, player_number):
+    """
+    Plots the resource trends for a specific player over the simulated turns.
+
+    Args:
+        data: A dictionary containing the collected data (returned by catan_simulator).
+        player_number: The player number to plot the resource trends for.
+    """
+    plt.figure(figsize=(12, 6))
+    plt.title(f"Resource Trends for Player {player_number}")
+    plt.xlabel("Turn")
+    plt.ylabel("Resource Amount")
+
+    for resource_type, resource_history in data['resource_history'][player_number].items():
+        plt.plot(resource_history, label=resource_type)
+
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+def plot_settlement_city_trends(data, player_number):
+    """
+    Plots the settlement and city trends for a specific player.
+
+    Args:
+        data: A dictionary containing the collected data.
+        player_number: The player number.
+    """
+    plt.figure(figsize=(12, 6))
+    plt.title(f"Settlement and City Trends for Player {player_number}")
+    plt.xlabel("Turn")
+    plt.ylabel("Number of Structures")
+
+    plt.plot(data['settlement_history'][player_number], label='Settlements')
+    plt.plot(data['city_history'][player_number], label='Cities')
+
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+if __name__ == "__main__":
+    # 1. Define the game board template
+    board_template = {
+        1: ('wood', 2),
+        2: ('brick', 3),
+        3: ('sheep', 4),
+        4: ('wheat', 5),
+        5: ('ore', 6),
+        6: ('wood', 8),
+        7: ('brick', 9),
+        8: ('sheep', 10),
+        9: ('wheat', 11),
+        10: ('ore', 12),
+        11: ('desert', 7),
+        12: ('wood', 6),
+        13: ('wheat', 2),
+        14: ('ore', 3),
+        15: ('wood', 4),
+        16: ('brick', 5),
+        17: ('sheep', 6),
+        18: ('wheat', 8),
+        19: ('ore', 9)
+    }
+
+    # 2. Define the initial player settlements and cities template
+    initial_player_settlements_template = {
+        1: [1, 3, 5, 7, 13],
+        2: [2, 4, 6, 8, 15],
+        3: [8, 9, 10, 12, 17],
+    }
+    initial_player_cities_template = {
+        1: [1, 5],
+        2: [4, 8],
+        3: [10],
+    }
+
+    # 3. Set the simulation parameters
+    num_simulations = 1000  # Increase for more robust statistics
+    num_turns = 50  # Or adjust as needed
+
+    # 4. Run the simulation
+    simulation_data = catan_simulator(num_simulations, num_turns, board_template, initial_player_settlements_template, initial_player_cities_template)
+
+    # 5. Analyze the simulation data
+    analyze_simulation_data(simulation_data)
+
+    # 6. Calculate stability metrics
+    stability_metrics = calculate_stability_metrics(simulation_data)
+    print("\n--- Stability Metrics ---")
+    print(stability_metrics)
+
+    # 7. Plot the results for a specific player (e.g., Player 1)
+    plot_resource_trends(simulation_data, player_number=1)
+    plot_settlement_city_trends(simulation_data, player_number=1)

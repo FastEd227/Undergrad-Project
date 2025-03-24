@@ -1,0 +1,269 @@
+import random
+import tkinter as tk
+from tkinter import messagebox
+from enum import Enum
+from typing import List, Dict
+
+# Enum to represent resources
+class Resource(Enum):
+    WOOD = "wood"
+    BRICK = "brick"
+    SHEEP = "sheep"
+    WHEAT = "wheat"
+    ORE = "ore"
+    DESERT = "desert"
+
+# Tile class to represent each hex tile
+class Tile:
+    def __init__(self, resource: Resource, number: int, position: int):
+        self.resource = resource
+        self.number = number
+        self.position = position
+
+# CatanBoard class to handle the board and game mechanics
+class CatanBoard:
+    def __init__(self, tiles: List[Tile], tile_adjacencies: Dict[int, List[int]], settlement_adjacencies: Dict[int, List[int]]):
+        self.tiles = {tile.position: tile for tile in tiles}
+        self.tile_adjacencies = tile_adjacencies
+        self.settlement_adjacencies = settlement_adjacencies
+        self.players = []
+        self.current_turn = 0
+
+    def add_player(self, player: "Player"):
+        self.players.append(player)
+
+    def build_settlement(self, player: "Player", position: int):
+        player.build_settlement(position)
+
+    def build_road(self, player: "Player", position: int):
+        player.build_road(position)
+
+    def roll_dice(self):
+        return random.randint(1, 6) + random.randint(1, 6)
+
+    def distribute_resources(self, roll: int):
+        for tile in self.tiles.values():
+            if tile.number == roll:
+                for player in self.players:
+                    if tile.position in player.settlements:
+                        player.resources[tile.resource] += 1
+
+    def next_turn(self):
+        self.current_turn = (self.current_turn + 1) % len(self.players)
+
+    def get_current_player(self):
+        return self.players[self.current_turn]
+
+# Player class with trading, building settlements, and AI logic
+class Player:
+    def __init__(self, name: str, game_board: CatanBoard):
+        self.name = name
+        self.resources = {
+            Resource.WOOD: 0,
+            Resource.BRICK: 0,
+            Resource.SHEEP: 0,
+            Resource.WHEAT: 0,
+            Resource.ORE: 0,
+        }
+        self.settlements = []
+        self.roads = []
+        self.victory_points = 0
+        self.game_board = game_board
+
+    def build_settlement(self, position: int):
+        self.settlements.append(position)
+
+    def build_road(self, position: int):
+        self.roads.append(position)
+
+    def calculate_victory_points(self):
+        self.victory_points = len(self.settlements)  # For simplicity, 1 point per settlement
+
+    def trade_with_bank(self, resource_to_trade: Resource, resource_to_receive: Resource):
+        if resource_to_trade == Resource.DESERT or resource_to_receive == Resource.DESERT:
+            print(f"{self.name} cannot trade with desert resources.")
+            return
+
+        if self.resources[resource_to_trade] >= 4:  # Bank trade is 4:1 for simplicity
+            self.resources[resource_to_trade] -= 4
+            self.resources[resource_to_receive] += 1
+            print(f"{self.name} traded 4 {resource_to_trade.value} for 1 {resource_to_receive.value}.")
+        else:
+            print(f"{self.name} does not have enough {resource_to_trade.value} to trade.")
+
+    def ai_trade(self):
+        """AI strategy to trade resources with other players."""
+        resources_needed = [r for r in Resource if self.resources.get(r, 0) < 4 and r != Resource.DESERT]
+        
+        resources_available = {}
+        for other_player in self.game_board.players:
+            if other_player == self:
+                continue
+            
+            for r in Resource:
+                if other_player.resources.get(r, 0) > 4 and r != Resource.DESERT:
+                    if r not in resources_available:
+                        resources_available[r] = []
+                    resources_available[r].append(other_player)
+
+        if resources_needed and resources_available:
+            for resource_needed in resources_needed:
+                if resource_needed in resources_available:
+                    other_player = random.choice(resources_available[resource_needed])
+                    self.trade_with_player(other_player, resource_needed, random.choice([r for r in Resource if r != Resource.DESERT and r != resource_needed]))
+
+    def ai_trade_with_players(self):
+        """AI strategy to trade with other players."""
+        for other_player in self.game_board.players:
+            if other_player == self:
+                continue
+
+            resources_needed = [r for r in Resource if self.resources.get(r, 0) < 4 and r != Resource.DESERT]
+            resources_available = [r for r in Resource if other_player.resources.get(r, 0) > 4 and r != Resource.DESERT]
+
+            if resources_needed and resources_available:
+                resource_to_receive = random.choice(resources_needed)
+                resource_to_trade = random.choice(resources_available)
+
+                if self.resources.get(resource_to_receive, 0) < 4 and other_player.resources.get(resource_to_trade, 0) > 4:
+                    self.trade_with_player(other_player, resource_to_trade, resource_to_receive)
+
+    def trade_with_player(self, other_player: "Player", resource_to_trade: Resource, resource_to_receive: Resource):
+        """Perform a trade with another player."""
+        print(f"{self.name} trades {resource_to_trade.value} with {other_player.name} for {resource_to_receive.value}.")
+        
+        self.resources[resource_to_trade] -= 1
+        other_player.resources[resource_to_trade] += 1
+        self.resources[resource_to_receive] += 1
+        other_player.resources[resource_to_receive] -= 1
+
+    def get_possible_road_positions(self):
+        possible_positions = []
+        for settlement_pos in self.settlements:
+            adj_tiles = self.game_board.settlement_adjacencies.get(settlement_pos, [])
+            for tile in adj_tiles:
+                if tile not in self.roads and tile not in self.settlements:
+                    possible_positions.append(tile)
+        return possible_positions
+
+    def place_road(self):
+        possible_positions = self.get_possible_road_positions()
+        if possible_positions:
+            road_to_build = random.choice(possible_positions)
+            self.build_road(road_to_build)
+            print(f"{self.name} built a road at position {road_to_build}")
+
+# Initialize the game board
+tiles = [
+    Tile(Resource.WOOD, 5, 1), Tile(Resource.BRICK, 9, 2), Tile(Resource.SHEEP, 11, 3),
+    Tile(Resource.ORE, 8, 4), Tile(Resource.WHEAT, 10, 5), Tile(Resource.WOOD, 4, 6),
+    Tile(Resource.BRICK, 7, 7), Tile(Resource.ORE, 6, 8), Tile(Resource.WHEAT, 12, 9),
+    Tile(Resource.SHEEP, 3, 10), Tile(Resource.ORE, 2, 11), Tile(Resource.SHEEP, 6, 12),
+    Tile(Resource.WOOD, 8, 13), Tile(Resource.BRICK, 4, 14), Tile(Resource.WHEAT, 3, 15),
+    Tile(Resource.ORE, 9, 16), Tile(Resource.WOOD, 10, 17), Tile(Resource.BRICK, 2, 18),
+    Tile(Resource.SHEEP, 5, 19), Tile(Resource.WHEAT, 6, 20)
+]
+
+tile_adjacencies = {
+    1: [2, 6], 2: [1, 7], 3: [4, 8], 4: [3, 9], 5: [6, 10], 6: [5, 11],
+    7: [1, 2], 8: [3, 4], 9: [5, 6], 10: [6, 7], 11: [8, 9], 12: [10, 11],
+}
+
+settlement_adjacencies = {
+    1: [2, 6], 2: [1, 7], 3: [4, 8], 4: [3, 9], 5: [6, 10], 6: [5, 11],
+    7: [1, 2], 8: [3, 4], 9: [5, 6], 10: [6, 7], 11: [8, 9], 12: [10, 11],
+}
+
+board = CatanBoard(tiles, tile_adjacencies, settlement_adjacencies)
+
+# Add players to the game board before the game starts
+player1 = Player("Player 1", board)
+player2 = Player("AI 1", board)
+player3 = Player("AI 2", board)
+
+# Add players to the board's players list
+board.add_player(player1)
+board.add_player(player2)
+board.add_player(player3)
+
+# GUI setup
+root = tk.Tk()
+root.title("Catan Game Simulation")
+
+# Game Board Display
+def create_board():
+    board_frame = tk.Frame(root)
+    board_frame.pack()
+
+    for row in range(5):
+        for col in range(5):
+            pos = row * 5 + col + 1
+            if pos in board.tiles:
+                tile = board.tiles[pos]
+                button = tk.Button(board_frame, text=f"{tile.resource.name[0]}{tile.number}", width=8, height=3,
+                                   command=lambda p=pos: on_tile_click(p))
+                button.grid(row=row, column=col, padx=5, pady=5)
+            else:
+                empty_tile = tk.Label(board_frame, width=8, height=3)
+                empty_tile.grid(row=row, column=col, padx=5, pady=5)
+
+# Handle tile click event
+def on_tile_click(position):
+    player = board.get_current_player()
+    if position in player.settlements:
+        messagebox.showinfo("Tile Clicked", f"{player.name} already has a settlement here!")
+    else:
+        player.build_settlement(position)
+        update_resources()
+        messagebox.showinfo("Build Settlement", f"{player.name} built a settlement at position {position}!")
+
+# Update player resources and display
+def update_resources():
+    player = board.get_current_player()
+    player_info_label.config(text=f"{player.name}\nResources: {player.resources}\nVictory Points: {player.victory_points}")
+
+# Next Turn button
+def next_turn():
+    board.next_turn()
+    player = board.get_current_player()
+    update_resources()
+
+    if player != board.players[0]:  # If AI, simulate AI actions
+        simulate_ai_turn(player)
+
+# Simulate AI turn
+def simulate_ai_turn(player):
+    roll = random.randint(1, 6) + random.randint(1, 6)
+    board.distribute_resources(roll)
+    player.calculate_victory_points()
+
+    # AI building settlements and roads
+    if random.choice([True, False]):
+        position = random.randint(1, 20)
+        player.build_settlement(position)
+
+    if random.choice([True, False]):
+        position = random.randint(1, 20)
+        player.place_road()
+
+    update_resources()
+    board.next_turn()
+
+# Create buttons for actions
+next_turn_button = tk.Button(root, text="Next Turn", command=next_turn)
+next_turn_button.pack(pady=20)
+
+# Add players to the game
+player1 = Player("Player 1", board)
+player2 = Player("AI 1", board)
+player3 = Player("AI 2", board)
+
+# Initialize player info label
+player_info_label = tk.Label(root, text="")
+player_info_label.pack()
+
+# Initialize the game board
+create_board()
+
+# Start the GUI loop
+root.mainloop()
