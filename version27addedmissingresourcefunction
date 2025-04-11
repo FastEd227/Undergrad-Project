@@ -1,0 +1,857 @@
+import random
+from collections import defaultdict
+import pygame
+import math
+
+##Working building functionalilty
+##working trading with bank functionalitly
+##player two working and funcitonal
+STRATEGY_MAPPING = {
+    1: "most_common_roll",
+    2: "most_valuable_resource",
+    3: "missing_resource"  # New strategy
+}
+
+class CatanSimulation:
+    """
+    A simplified simulation of Settlers of Catan focusing on settlement placement,
+    resource generation, and expansion logic.
+    """
+
+    def __init__(self, board_layout, num_turns=100, resource_values=None, show_detailed_output=1):
+        """
+        Initializes the simulation.
+
+        Args:
+            board_layout (dict): A dictionary representing the game board.
+            num_turns (int): The number of turns to simulate.
+            resource_values (dict): A dictionary specifying the value of each resource.
+            show_detailed_output (int): 1 to show detailed output, 0 to hide it.
+        """
+        self.board = board_layout
+        self.num_turns = num_turns
+        self.settlements = {}  # Player: [(x, y, position, level)] level 1: settlement, 2: city
+        self.roads = defaultdict(list)  # Player: [(start_x, start_y, end_x, end_y)]
+        self.resources = defaultdict(int)
+        self.production_history = defaultdict(lambda: defaultdict(int))
+        self.resource_values = resource_values or {
+            'wood': 1,
+            'brick': 1,
+            'sheep': 1,
+            'wheat': 2,
+            'ore': 2,
+            'desert': 0
+        }
+        self.player_resources = defaultdict(lambda: defaultdict(list))  # Store resources per player and turn
+        self.dice_rolls = []  # List to store dice rolls
+        self.turn_count = 0
+        self.max_settlements = 5
+        self.max_cities = 4
+        self.show_detailed_output = show_detailed_output  # Store the detailed output flag
+
+        # Precalculate valid settlement locations
+        self.valid_settlement_locations = self.get_valid_settlement_locations()
+
+        # Initialize starting resources for both players
+        for player in [1, 2]:
+            self.player_resources[player]['wood'].append((0, 2))  # 2 wood
+            self.player_resources[player]['brick'].append((0, 2))  # 2 brick
+            self.player_resources[player]['sheep'].append((0, 2))  # 2 sheep
+            self.player_resources[player]['wheat'].append((0, 2))  # 2 wheat
+
+    def reset_game(self):
+        """
+        Resets the game state to ensure a fresh start for each simulation.
+        """
+        self.settlements = {}  # Reset settlements
+        self.roads = defaultdict(list)  # Reset roads
+        self.resources = defaultdict(int)  # Reset global resource counts
+        self.production_history = defaultdict(lambda: defaultdict(int))  # Reset production history
+        self.player_resources = defaultdict(lambda: defaultdict(list))  # Reset player resources
+        self.dice_rolls = []  # Reset dice rolls
+        self.turn_count = 0  # Reset turn counter
+        self.valid_settlement_locations = self.get_valid_settlement_locations()  # Recalculate valid settlement locations
+
+        # Initialize starting resources for both players
+        for player in [1, 2]:
+            self.player_resources[player]['wood'].append((0, 2))  # 2 wood
+            self.player_resources[player]['brick'].append((0, 2))  # 2 brick
+            self.player_resources[player]['sheep'].append((0, 2))  # 2 sheep
+            self.player_resources[player]['wheat'].append((0, 2))  # 2 wheat
+
+    def get_valid_settlement_locations(self):
+        """
+        Calculates the valid settlement locations based on the board layout.
+        A settlement location is valid if it is at the corner of 3 hexes.
+        """
+        locations = set()
+        for x, y in self.board:
+            # Define the six corners of a hexagon
+            corners = [
+                (x - 1, y - 1), (x - 1, y), (x, y + 1),
+                (x + 1, y + 1), (x + 1, y), (x, y - 1)
+            ]
+            for i in range(6):
+                loc = (x, y, i)
+                locations.add(loc)
+        return list(locations)
+
+    def is_valid_settlement_location(self, location, player, initial_placement=False):
+        """
+        Checks if a given location is a valid settlement location.
+        A settlement must not overlap with another settlement.
+
+        Args:
+            location (tuple): The (x, y, position) of the settlement.
+            player (int): The player ID.
+            initial_placement (bool): Ignored in this simplified version.
+
+        Returns:
+            bool: True if the location is valid, False otherwise.
+        """
+        # Check if the location is already occupied by another settlement
+        for other_player, settlements in self.settlements.items():
+            for other_location, _ in settlements:
+                if location == other_location:
+                    return False
+        return True
+
+    def place_settlement(self, player, location, level=1):
+        """
+        Places a settlement or city for a player at the specified location.
+
+        Args:
+            player (int): The player ID.
+            location (tuple): The (x, y, position) of the settlement.
+            level (int): 1 for settlement, 2 for city.
+        """
+        if player not in self.settlements:
+            self.settlements[player] = []
+        self.settlements[player].append((location, level))
+
+    def roll_dice(self):
+        """
+        Simulates rolling two six-sided dice.
+
+        Returns:
+            int: The sum of the dice rolls.
+        """
+        roll = random.randint(1, 6) + random.randint(1, 6)
+        self.dice_rolls.append(roll)  # Store the dice roll
+        return roll
+
+    def produce_resources(self, roll):
+        """
+        Distributes resources based on the dice roll and settlement locations.
+        Skips production for desert tiles.
+
+        Args:
+            roll (int): The result of the dice roll.
+        """
+        if roll == 7:  # Skip turn for desert roll
+            return {}
+
+        produced = defaultdict(int)
+        for player, settlement_info_list in self.settlements.items():
+            for settlement_info in settlement_info_list:
+                loc, level = settlement_info
+                x, y, pos = loc
+                tiles = self.get_connected_tiles(x, y, pos)
+                for tile_x, tile_y in tiles:
+                    if (tile_x, tile_y) in self.board:
+                        tile = self.board[(tile_x, tile_y)]
+                        if tile['number'] == roll and tile['resource'] != 'desert':
+                            resource = tile['resource']
+                            # Settlements produce 1, cities produce 2
+                            amount = 1 if level == 1 else 2
+                            self.resources[resource] += amount
+                            self.player_resources[player][resource].append((self.turn_count, amount))  # Store turn and amount
+                            produced[resource] += amount
+
+        # Print detailed output if enabled
+        if self.show_detailed_output:
+            print(f"Turn {self.turn_count}: Player 1 Resources: {self.player_resources[1]}")
+            print(f"Turn {self.turn_count}: Player 2 Resources: {self.player_resources[2]}")
+
+        return produced
+
+    def get_connected_tiles(self, x, y, position):
+        """
+        Gets the coordinates of the three tiles connected to a settlement.
+
+        Args:
+            x (int): x coordinate of the settlement.
+            y (int): y coordinate of the settlement.
+            position (int): The position (0-5) of the settlement around the hex.
+
+        Returns:
+            list: A list of (tile_x, tile_y) tuples representing the connected tiles.
+        """
+        if position == 0:
+            return [(x, y), (x - 1, y - 1), (x - 1, y)]
+        elif position == 1:
+            return [(x, y), (x - 1, y), (x, y + 1)]
+        elif position == 2:
+            return [(x, y), (x, y + 1), (x + 1, y + 1)]
+        elif position == 3:
+            return [(x, y), (x + 1, y + 1), (x + 1, y)]
+        elif position == 4:
+            return [(x, y), (x + 1, y), (x, y - 1)]
+        elif position == 5:
+            return [(x, y), (x, y - 1), (x - 1, y - 1)]
+        else:
+            return []  # Invalid position
+
+    def can_build_settlement(self, player):
+        """
+        Checks if a player has enough resources to build a settlement.
+        Settlement cost: 1 wood, 1 brick, 1 sheep, 1 wheat
+        """
+        player_resources = self.player_resources.get(player, {})
+        wood_count = sum(amt for turn, amt in player_resources.get('wood', []))
+        brick_count = sum(amt for turn, amt in player_resources.get('brick', []))
+        sheep_count = sum(amt for turn, amt in player_resources.get('sheep', []))
+        wheat_count = sum(amt for turn, amt in player_resources.get('wheat', []))
+
+        return wood_count >= 1 and brick_count >= 1 and sheep_count >= 1 and wheat_count >= 1
+
+    def can_build_city(self, player):
+        """
+        Checks if a player has enough resources to build a city.
+        City cost: 2 wheat, 3 ore
+        """
+        player_resources = self.player_resources.get(player, {})
+        wheat_count = sum(amt for turn, amt in player_resources.get('wheat', []))
+        ore_count = sum(amt for turn, amt in player_resources.get('ore', []))
+        settlements = [s for s in self.settlements.get(player, []) if s[1] == 1]  # count only settlements, not cities
+        return wheat_count >= 2 and ore_count >= 3 and len(settlements) > 0 and len(
+            [s for s in self.settlements.get(player, []) if s[1] == 2]) < self.max_cities
+
+    def can_build_road(self, player):
+        """
+        Checks if a player has enough resources to build a road.
+        Road cost: 1 wood, 1 brick
+        """
+        player_resources = self.player_resources.get(player, {})
+        wood_count = sum(amt for turn, amt in player_resources.get('wood', []))
+        brick_count = sum(amt for turn, amt in player_resources.get('brick', []))
+        return wood_count >= 1 and brick_count >= 1
+
+    def build_settlement(self, player, location):
+        """
+        Builds a settlement for a player at the specified location.
+
+        Args:
+            player (int): The player ID.
+            location (tuple): The (x, y, position) of the settlement.
+        """
+        if not self.is_valid_settlement_location(location, player):
+            raise ValueError(f"Invalid settlement location: {location}")
+        if not self.can_build_settlement(player):
+            raise ValueError(f"Player {player} does not have enough resources to build a settlement.")
+        self.place_settlement(player, location, 1)
+        self.deduct_resources(player, {'wood': 1, 'brick': 1, 'sheep': 1, 'wheat': 1})
+
+    def build_city(self, player, location):
+        """
+        Builds a city for a player at the specified location.
+        Assumes that can_build_city has already been checked.
+        """
+        if not self.can_build_city(player):
+            raise ValueError(f"Player {player} does not have enough resources to build a city.")
+        # Find the existing settlement to upgrade
+        for i, settlement_info in enumerate(self.settlements[player]):
+            if settlement_info[0] == location and settlement_info[1] == 1:  # Find the settlement to upgrade
+                self.settlements[player][i] = (location, 2)  # Upgrade to city
+                break
+        self.deduct_resources(player, {'wheat': 2, 'ore': 3})
+
+    def build_road(self, player, start, end):
+        """
+        Builds a road for the player between two points.
+
+        Args:
+            player (int): The player ID.
+            start (tuple): The starting point of the road (x, y).
+            end (tuple): The ending point of the road (x, y).
+        """
+        if not self.can_build_road(player):
+            raise ValueError(f"Player {player} does not have enough resources to build a road.")
+        self.roads[player].append((start[0], start[1], end[0], end[1]))
+        self.deduct_resources(player, {'wood': 1, 'brick': 1})
+
+    def deduct_resources(self, player, costs):
+        """
+        Deducts the specified resources from a player's inventory.
+
+        Args:
+            player (int): The player ID.
+            costs (dict): A dictionary specifying the resources to deduct and their amounts.
+        """
+        for resource, cost in costs.items():
+            remaining_cost = cost
+            updated_resources = []
+            for turn, amount in self.player_resources[player][resource]:
+                if remaining_cost <= 0:
+                    updated_resources.append((turn, amount))
+                elif amount > remaining_cost:
+                    updated_resources.append((turn, amount - remaining_cost))
+                    remaining_cost = 0
+                else:
+                    remaining_cost -= amount
+            self.player_resources[player][resource] = updated_resources
+
+    def trade_with_bank(self, player):
+        """
+        Allows the player to trade excess resources with the bank at a 4:1 ratio,
+        prioritizing resources needed for settlements and cities.
+
+        Args:
+            player (int): The player ID.
+        """
+        # Check if the player can already build a settlement or city
+        if self.can_build_settlement(player) or self.can_build_city(player):
+            return  # No need to trade if the player can already build
+
+        # Resources required to build a settlement or city
+        required_resources = {'wood': 1, 'brick': 1, 'sheep': 1, 'wheat': 1, 'ore': 3}
+
+        # Calculate the player's current resource counts
+        player_resources = self.player_resources.get(player, {})
+        resource_counts = {
+            resource: sum(amount for _, amount in player_resources.get(resource, []))
+            for resource in required_resources
+        }
+
+        # Determine which resources are missing
+        missing_resources = {
+            resource: required - resource_counts.get(resource, 0)
+            for resource, required in required_resources.items()
+            if resource_counts.get(resource, 0) < required
+        }
+
+        # If no resources are missing, no need to trade
+        if not missing_resources:
+            return
+
+        # Find a resource to trade (must have at least 4 of it and not be needed for the settlement or city)
+        for resource, count in resource_counts.items():
+            if count >= 4 and resource not in missing_resources:
+                # Deduct 4 of the resource
+                self.deduct_resources(player, {resource: 4})
+
+                # Add 1 of a missing resource
+                for missing_resource in missing_resources:
+                    self.player_resources[player][missing_resource].append((self.turn_count, 1))
+                    if self.show_detailed_output:
+                        print(f"Player {player} traded 4 {resource} for 1 {missing_resource}.")
+                    return  # Trade only once per turn
+
+    def run_simulation(self, strategy_player_1=1, strategy_player_2=2):
+        """
+        Runs the simulation for the specified number of turns using the given
+        settlement placement strategies for two AI players.
+
+        Args:
+            strategy_player_1 (int): The strategy number for Player 1.
+            strategy_player_2 (int): The strategy number for Player 2.
+        """
+        # Map strategy numbers to strategy names
+        strategy_player_1 = STRATEGY_MAPPING.get(strategy_player_1, "most_common_roll")
+        strategy_player_2 = STRATEGY_MAPPING.get(strategy_player_2, "most_common_roll")
+
+        # Reset the game state
+        self.reset_game()
+
+        # 1. Settlement Placement Phase
+        for player, strategy in [(1, strategy_player_1), (2, strategy_player_2)]:
+            for settlement_number in range(2):  # Each player places two settlements
+                if strategy == "most_common_roll":
+                    settlement_location = self.choose_settlement_by_most_common_roll(
+                        player=player, placed_settlements=self.settlements.get(player, [])
+                    )
+                elif strategy == "most_valuable_resource":
+                    settlement_location = self.choose_settlement_by_most_valuable_resource(
+                        player=player, placed_settlements=self.settlements.get(player, [])
+                    )
+                elif strategy == "missing_resource":
+                    settlement_location = self.choose_settlement_by_missing_resource(
+                        player=player, placed_settlements=self.settlements.get(player, [])
+                    )
+                else:
+                    raise ValueError(f"Invalid strategy for Player {player}: {strategy}")
+
+                # Place the settlement
+                if settlement_location is not None and self.is_valid_settlement_location(settlement_location, player):
+                    self.build_settlement(player, settlement_location)
+                    if self.show_detailed_output:
+                        print(f"Player {player} placed settlement {settlement_number + 1} at {settlement_location}.")
+                else:
+                    if self.show_detailed_output:
+                        print(f"Warning: No valid settlement location found for Player {player} during placement {settlement_number + 1}.")
+                    # Fallback: Choose any valid location
+                    fallback_location = next(
+                        (loc for loc in self.valid_settlement_locations if self.is_valid_settlement_location(loc, player)),
+                        None
+                    )
+                    if fallback_location:
+                        self.build_settlement(player, fallback_location)
+                        if self.show_detailed_output:
+                            print(f"Player {player} placed fallback settlement {settlement_number + 1} at {fallback_location}.")
+                    else:
+                        if self.show_detailed_output:
+                            print(f"Error: No fallback settlement location available for Player {player}.")
+
+        # 2. Resource Production and Expansion Phase
+        for turn in range(self.num_turns):
+            self.turn_count = turn + 1
+            roll = self.roll_dice()
+            produced = self.produce_resources(roll)
+            self.production_history[turn] = produced
+
+            # Players trade with the bank, build roads, settlements, and cities
+            for player, strategy in [(1, strategy_player_1), (2, strategy_player_2)]:
+                self.trade_with_bank(player)  # Allow trading with the bank
+
+                # Attempt to build a settlement
+                if self.can_build_settlement(player):
+                    if strategy == "most_common_roll":
+                        settlement_location = self.choose_settlement_by_most_common_roll(
+                            player=player, placed_settlements=self.settlements.get(player, [])
+                        )
+                    elif strategy == "most_valuable_resource":
+                        settlement_location = self.choose_settlement_by_most_valuable_resource(
+                            player=player, placed_settlements=self.settlements.get(player, [])
+                        )
+                    elif strategy == "missing_resource":
+                        settlement_location = self.choose_settlement_by_missing_resource(
+                            player=player, placed_settlements=self.settlements.get(player, [])
+                        )
+                    else:
+                        raise ValueError(f"Invalid strategy for Player {player}: {strategy}")
+
+                    if settlement_location is not None:
+                        self.build_settlement(player, settlement_location)
+                        if self.show_detailed_output:
+                            print(f"Player {player} built a settlement at {settlement_location}.")
+                    continue  # Skip other actions if a settlement is built
+
+                # Attempt to upgrade a settlement to a city
+                if self.can_build_city(player):
+                    city_location = self.choose_city_location(player)
+                    if city_location is not None:
+                        self.build_city(player, city_location)
+                        if self.show_detailed_output:
+                            print(f"Player {player} upgraded a settlement to a city at {city_location}.")
+                    continue  # Skip other actions if a city is built
+
+                # Attempt to build a road
+                if self.can_build_road(player):
+                    road_start = (0, 0)  # Replace with logic to choose a valid road start
+                    road_end = (0, 1)  # Replace with logic to choose a valid road end
+                    self.build_road(player, road_start, road_end)
+                    if self.show_detailed_output:
+                        print(f"Player {player} built a road from {road_start} to {road_end}.")
+
+                # Check for win condition
+                victory_points = self.calculate_victory_points(player)
+                if self.show_detailed_output:
+                    print(f"Player {player} has {victory_points} victory points.")
+                if victory_points >= 10:
+                    print(f"Player {player} wins with {victory_points} victory points!")
+                    self.display_results(strategy_player_1, strategy_player_2)  # Display results before exiting
+                    return  # End the simulation early if a player wins
+
+        # 3. Display Results
+        self.display_results(strategy_player_1, strategy_player_2)
+
+    def choose_settlement_by_most_common_roll(self, player, placed_settlements):
+        """
+        Chooses a settlement location based on the most common dice rolls (6 and 8).
+        It will choose a location that is connected to a 6 or 8 tile, is not already occupied,
+        and satisfies the settlement placement rules. Additionally, it prioritizes locations
+        with diverse resources (wood, brick, sheep, wheat).
+        """
+        best_locations = []
+        for location in self.valid_settlement_locations:
+            x, y, pos = location
+            tiles = self.get_connected_tiles(x, y, pos)
+            connected_resources = set()
+            score = 0
+
+            for tile_x, tile_y in tiles:
+                if (tile_x, tile_y) in self.board:
+                    tile = self.board[(tile_x, tile_y)]
+                    if tile['number'] in [6, 8]:  # High-frequency dice rolls
+                        score += 2  # Higher weight for 6 and 8
+                    elif tile['number'] in [5, 9]:  # Medium-frequency dice rolls
+                        score += 1
+                    if tile['resource'] != 'desert':
+                        connected_resources.add(tile['resource'])
+
+            # Prioritize locations with diverse resources
+            if len(connected_resources) >= 3:  # At least 3 different resources
+                score += 3
+
+            # Ensure the location is valid and not already occupied
+            if location not in [s[0] for s in placed_settlements] and self.is_valid_settlement_location(location, player):
+                best_locations.append((location, score))
+
+        # Sort locations by score in descending order and return the best one
+        if best_locations:
+            best_locations.sort(key=lambda x: x[1], reverse=True)
+            return best_locations[0][0]  # Return the location with the highest score
+        else:
+            # Fallback: Choose any valid location
+            available_locations = [loc for loc in self.valid_settlement_locations if
+                                   loc not in [s[0] for s in placed_settlements] and self.is_valid_settlement_location(loc, player)]
+            if available_locations:
+                return random.choice(available_locations)
+            else:
+                return None
+
+    def choose_settlement_by_most_valuable_resource(self, player, placed_settlements):
+        """
+        Chooses a settlement location based on the resource value. It will choose a
+        location that is connected to a tile with the most valuable resource, is not already occupied,
+        and satisfies the settlement placement rules.
+        """
+        best_locations = []
+        for location in self.valid_settlement_locations:
+            x, y, pos = location
+            tiles = self.get_connected_tiles(x, y, pos)
+            for tile_x, tile_y in tiles:
+                if (tile_x, tile_y) in self.board:
+                    resource = self.board[(tile_x, tile_y)]['resource']
+                    if location not in [s[0] for s in placed_settlements] and self.is_valid_settlement_location(location, player):
+                        best_locations.append(location)
+                        break
+        if best_locations:
+            location_values = {}
+            for location in best_locations:
+                x, y, pos = location
+                tiles = self.get_connected_tiles(x, y, pos)
+                for tile_x, tile_y in tiles:
+                    if (tile_x, tile_y) in self.board:
+                        resource = self.board[(tile_x, tile_y)]['resource']
+                        value = self.resource_values[resource]
+                        location_values[location] = value
+            sorted_locations = sorted(location_values, key=location_values.get, reverse=True)
+            return sorted_locations[0]
+        else:
+            # Fallback: Choose any valid location
+            available_locations = [loc for loc in self.valid_settlement_locations if
+                                   loc not in [s[0] for s in placed_settlements] and self.is_valid_settlement_location(loc, player)]
+            if available_locations:
+                return random.choice(available_locations)
+            else:
+                return None
+
+    def choose_settlement_by_missing_resource(self, player, placed_settlements):
+        """
+        Chooses a settlement location based on the resources the player is missing.
+        It prioritizes locations connected to tiles that produce resources the player lacks.
+
+        Args:
+            player (int): The player ID.
+            placed_settlements (list): List of settlements already placed by the player.
+
+        Returns:
+            tuple: The chosen settlement location (x, y, position), or None if no valid location is found.
+        """
+        # Calculate the player's current resource counts
+        player_resources = self.player_resources.get(player, {})
+        resource_counts = {
+            resource: sum(amount for _, amount in player_resources.get(resource, []))
+            for resource in self.resource_values.keys()
+        }
+
+        # Identify missing resources (resources with a count of 0)
+        missing_resources = {resource for resource, count in resource_counts.items() if count == 0}
+
+        # Find the best settlement locations based on missing resources
+        best_locations = []
+        for location in self.valid_settlement_locations:
+            x, y, pos = location
+            tiles = self.get_connected_tiles(x, y, pos)
+            connected_resources = set()
+
+            for tile_x, tile_y in tiles:
+                if (tile_x, tile_y) in self.board:
+                    resource = self.board[(tile_x, tile_y)]['resource']
+                    if resource in missing_resources:
+                        connected_resources.add(resource)
+
+            # Prioritize locations connected to missing resources
+            if connected_resources and location not in [s[0] for s in placed_settlements] and self.is_valid_settlement_location(location, player):
+                best_locations.append((location, len(connected_resources)))
+
+        # Sort locations by the number of missing resources they provide and return the best one
+        if best_locations:
+            best_locations.sort(key=lambda x: x[1], reverse=True)
+            return best_locations[0][0]  # Return the location with the most missing resources
+        else:
+            # Fallback: Choose any valid location
+            available_locations = [loc for loc in self.valid_settlement_locations if
+                                   loc not in [s[0] for s in placed_settlements] and self.is_valid_settlement_location(loc, player)]
+            if available_locations:
+                return random.choice(available_locations)
+            else:
+                return None
+
+    def choose_city_location(self, player):
+        """
+        Chooses a settlement location to upgrade to a city.  For simplicity,
+        we'll just choose the first settlement the player owns.
+        """
+        for location_info in self.settlements.get(player, []):
+            if location_info[1] == 1:  # Find a settlement
+                return location_info[0]
+        return None
+
+    def calculate_victory_points(self, player):
+        """
+        Calculates the victory points for a player.
+        Settlements are worth 1 point, and cities are worth 2 points.
+
+        Args:
+            player (int): The player ID.
+
+        Returns:
+            int: The total victory points for the player.
+        """
+        points = 0
+        for _, level in self.settlements.get(player, []):
+            if level == 1:  # Settlement
+                points += 1
+            elif level == 2:  # City
+                points += 2
+        return points
+
+    def display_results(self, strategy_player_1, strategy_player_2):
+        """
+        Displays the results of the simulation in a compact format.
+
+        Args:
+            strategy_player_1 (str): The settlement placement strategy for Player 1.
+            strategy_player_2 (str): The settlement placement strategy for Player 2.
+        """
+        print("--- Simulation Results ---")
+        print(f"Player 1 Strategy: {strategy_player_1}")
+        print(f"Player 2 Strategy: {strategy_player_2}")
+        print("\nSettlements:")
+        for player, locations in self.settlements.items():
+            settlements = ', '.join([f"{loc}: {'Settlement' if level == 1 else 'City'}" for loc, level in locations])
+            print(f"  Player {player}: {settlements}")
+
+        # Commenting out the detailed dice rolls output
+        # print("\nDice Rolls:")
+        # print(", ".join(map(str, self.dice_rolls)))
+
+        # Count the total occurrences of each dice roll
+        dice_roll_counts = defaultdict(int)
+        for roll in self.dice_rolls:
+            dice_roll_counts[roll] += 1
+
+        print("\nDice Roll Totals:")
+        for roll in range(2, 13):  # Dice rolls range from 2 to 12
+            print(f"  {roll}: {dice_roll_counts[roll]} times")
+
+        # Commenting out the "Total Resources Produced" section
+        # print("\nTotal Resources Produced:")
+        # for turn, production in self.production_history.items():
+        #     resources = ', '.join([f"{resource}: {amount}" for resource, amount in production.items()])
+        #     print(f"  Turn {turn + 1}: {resources if resources else 'None'}")
+
+        print("\nFinal Resources:")
+        final_resources = ', '.join([f"{resource}: {amount}" for resource, amount in self.resources.items()])
+        print(f"  {final_resources if final_resources else 'No resources remaining.'}")
+
+        # Count how many times each resource was rolled
+        resource_roll_counts = defaultdict(int)
+        for production in self.production_history.values():
+            for resource, amount in production.items():
+                resource_roll_counts[resource] += 1
+
+        print("\nResource Roll Counts:")
+        for resource, count in resource_roll_counts.items():
+            print(f"  {resource}: {count} times")
+
+        print("\nPlayer Resources:")
+        for player, resources in self.player_resources.items():
+            resource_summary = ', '.join([f"{resource}: {sum(amount for _, amount in turns_and_amounts)}"
+                                          for resource, turns_and_amounts in resources.items()])
+            print(f"  Player {player}: {resource_summary if resource_summary else 'No resources.'}")
+
+    def display_board(self):
+        """
+        Displays the board with settlements and cities in a Pygame window, centered in the window.
+        """
+        # Initialize Pygame
+        pygame.init()
+
+        # Constants for the display
+        TILE_RADIUS = 50  # Radius of each hex tile
+        TILE_SPACING = TILE_RADIUS * math.sqrt(3)  # Spacing between tiles
+        SCREEN_WIDTH = 800
+        SCREEN_HEIGHT = 600
+        FONT_SIZE = 16
+
+        # Colors
+        COLORS = {
+            'wood': (34, 139, 34),  # Green
+            'brick': (178, 34, 34),  # Red
+            'sheep': (144, 238, 144),  # Light green
+            'wheat': (255, 223, 0),  # Yellow
+            'ore': (169, 169, 169),  # Gray
+            'desert': (210, 180, 140),  # Tan
+            'text': (0, 0, 0),  # Black
+            'player1_settlement': (255, 255, 255),  # White for Player 1 settlements
+            'player1_city': (0, 0, 255),  # Blue for Player 1 cities
+            'player2_settlement': (255, 165, 0),  # Orange for Player 2 settlements
+            'player2_city': (255, 0, 0),  # Red for Player 2 cities
+        }
+
+        # Create the screen
+        screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+        pygame.display.set_caption("Catan Board")
+
+        # Font for text
+        font = pygame.font.Font(None, FONT_SIZE)
+
+        # Function to draw a hexagon
+        def draw_hexagon(surface, color, center, radius):
+            points = [
+                (
+                    center[0] + radius * math.cos(math.radians(angle)),
+                    center[1] + radius * math.sin(math.radians(angle))
+                )
+                for angle in range(0, 360, 60)
+            ]
+            pygame.draw.polygon(surface, color, points)
+            pygame.draw.polygon(surface, (0, 0, 0), points, 2)  # Black border
+
+        # Function to convert board coordinates to screen coordinates
+        def board_to_screen(x, y, offset_x, offset_y):
+            screen_x = offset_x + x * TILE_SPACING - y * TILE_SPACING // 2
+            screen_y = offset_y + y * TILE_RADIUS * 1.5
+            return screen_x, screen_y
+
+        # Calculate the center offset for the board
+        min_x = min(x for x, y in self.board.keys())
+        max_x = max(x for x, y in self.board.keys())
+        min_y = min(y for x, y in self.board.keys())
+        max_y = max(y for x, y in self.board.keys())
+
+        board_width = (max_x - min_x + 1) * TILE_SPACING
+        board_height = (max_y - min_y + 1) * TILE_RADIUS * 1.5
+
+        offset_x = (SCREEN_WIDTH - board_width) // 2
+        offset_y = (SCREEN_HEIGHT - board_height) // 2
+
+        # Draw the board
+        screen.fill((135, 206, 250))  # Light blue background
+        for (x, y), tile in self.board.items():
+            resource = tile['resource']
+            number = tile['number']
+            screen_x, screen_y = board_to_screen(x, y, offset_x, offset_y)
+
+            # Draw the hexagon
+            draw_hexagon(screen, COLORS[resource], (screen_x, screen_y), TILE_RADIUS)
+
+            # Draw the dice number
+            text = font.render(str(number), True, COLORS['text'])
+            screen.blit(text, (screen_x - text.get_width() // 2, screen_y - text.get_height() // 2))
+
+            # Draw settlements and cities
+            settlements = [
+                (player, loc, level)
+                for player, settlement_list in self.settlements.items()
+                for loc, level in settlement_list
+                if loc[:2] == (x, y)
+            ]
+            for player, loc, level in settlements:
+                angle = loc[2] * 60  # Settlement position around the hex
+                settlement_x = screen_x + TILE_RADIUS * 0.7 * math.cos(math.radians(angle))
+                settlement_y = screen_y + TILE_RADIUS * 0.7 * math.sin(math.radians(angle))
+                if player == 1:
+                    color = COLORS['player1_city'] if level == 2 else COLORS['player1_settlement']
+                elif player == 2:
+                    color = COLORS['player2_city'] if level == 2 else COLORS['player2_settlement']
+                pygame.draw.circle(screen, color, (int(settlement_x), int(settlement_y)), 8)
+
+        # Update the display
+        pygame.display.flip()
+
+        # Wait for the user to close the window
+        running = True
+        while running:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    running = False
+
+        pygame.quit()
+
+
+if __name__ == "__main__":
+    # Updated board layout resembling a larger Catan board
+    board_layout = {
+        (0, 0): {'resource': 'wood', 'number': 5},
+        (0, 1): {'resource': 'brick', 'number': 6},
+        (0, 2): {'resource': 'sheep', 'number': 8},
+        (0, 3): {'resource': 'wheat', 'number': 4},
+        (0, 4): {'resource': 'ore', 'number': 10},
+        (1, 0): {'resource': 'brick', 'number': 9},
+        (1, 1): {'resource': 'wood', 'number': 11},
+        (1, 2): {'resource': 'desert', 'number': 7},  # Desert tile
+        (1, 3): {'resource': 'sheep', 'number': 3},
+        (1, 4): {'resource': 'wheat', 'number': 8},
+        (1, 5): {'resource': 'ore', 'number': 4},
+        (2, 0): {'resource': 'sheep', 'number': 6},
+        (2, 1): {'resource': 'wheat', 'number': 2},
+        (2, 2): {'resource': 'wood', 'number': 5},
+        (2, 3): {'resource': 'brick', 'number': 9},
+        (2, 4): {'resource': 'sheep', 'number': 12},
+        (2, 5): {'resource': 'ore', 'number': 11},
+        (2, 6): {'resource': 'wheat', 'number': 10},
+        (3, 1): {'resource': 'wood', 'number': 8},
+        (3, 2): {'resource': 'brick', 'number': 4},
+        (3, 3): {'resource': 'sheep', 'number': 6},
+        (3, 4): {'resource': 'wheat', 'number': 3},
+        (3, 5): {'resource': 'ore', 'number': 9},
+        (4, 2): {'resource': 'wood', 'number': 10},
+        (4, 3): {'resource': 'brick', 'number': 5},
+        (4, 4): {'resource': 'sheep', 'number': 8},
+        (4, 5): {'resource': 'wheat', 'number': 11},
+    }
+
+    num_turns = 100
+    # Define resource values
+    resource_values = {
+        'wood': 0.781,
+        'brick': 0.781,
+        'sheep': 0.760,
+        'wheat': 1.350,
+        'ore': 1.329,
+        'desert': 0
+    }
+
+    # Variable to control detailed output and GUI display
+    SHOW_DETAILED_OUTPUT = 0  # Set to 1 to show detailed output and GUI, 0 to hide both
+
+    # Strategy variables
+    STRATEGY_PLAYER_1 = 3  # 1 = most_common_roll, 2 = most_valuable_resource, 3 = missing_resource
+    STRATEGY_PLAYER_2 = 2  # 1 = most_common_roll, 2 = most_valuable_resource, 3 = missing_resource
+
+    # Run multiple simulations
+    for i in range(1):  # Example: Run the simulation once
+        print(f"\n--- Simulation Run {i + 1} ---")
+        # Create a new simulation instance for each run
+        simulation = CatanSimulation(board_layout, num_turns, resource_values, SHOW_DETAILED_OUTPUT)
+
+        # Run simulation with the two AI players using different strategies
+        simulation.run_simulation(strategy_player_1=STRATEGY_PLAYER_1, strategy_player_2=STRATEGY_PLAYER_2)
+
+        # Conditionally display the GUI based on SHOW_DETAILED_OUTPUT
+        if SHOW_DETAILED_OUTPUT:
+            simulation.display_board()
